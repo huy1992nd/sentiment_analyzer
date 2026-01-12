@@ -1,4 +1,10 @@
+# Dependencies
+node_modules/
 **/node_modules/
+.pnp
+.pnp.js
+
+# Environment variables
 .env
 .env.local
 .env.development.local
@@ -7,36 +13,93 @@
 .env.development
 .env.test
 .env.production
-dist
-coverage
-node_modules
-logs
-.env
-.http
-dist
-src/public/uploads/
-http
-.yarnrc.yml
+.env*.local
 
-# OS
+# Build outputs
+dist/
+build/
+.next/
+out/
+*.tsbuildinfo
+
+# Testing
+coverage/
+**/coverage/
+.nyc_output/
+*.lcov
+*.log
+
+# Database files (Prisma)
+*.db
+*.db-journal
+*.db-shm
+*.db-wal
+**/prisma/*.db
+**/prisma/*.db-journal
+**/prisma/*.db-shm
+**/prisma/*.db-wal
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+# OS files
 .DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+*.swp
+*.swo
+*~
 
-# Tests
-/coverage
-/.nyc_output
-
-# IDEs and editors
-/.idea
-.project
-.classpath
-.c9/
-*.launch
-.settings/
-*.sublime-workspace
-
-# IDE - VSCode
+# IDE and editors
+.idea/
 .vscode/*
 !.vscode/settings.json
 !.vscode/tasks.json
 !.vscode/launch.json
 !.vscode/extensions.json
+*.sublime-project
+*.sublime-workspace
+.project
+.classpath
+.c9/
+*.launch
+.settings/
+*.code-workspace
+
+# Temporary files
+*.tmp
+*.temp
+.cache/
+.turbo/
+
+# Package manager files
+.yarnrc.yml
+.yarn/cache
+.yarn/unplugged
+.yarn/build-state.yml
+.yarn/install-state.gz
+.pnp.*
+
+# HTTP client files
+.http
+*.http
+
+# Uploads and user-generated content
+src/public/uploads/
+uploads/
+public/uploads/
+
+# Misc
+*.pem
+*.key
+*.cert
