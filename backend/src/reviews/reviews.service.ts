@@ -1,8 +1,10 @@
 import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
-import { SentimentService, SentimentResult } from '../sentiment/sentiment.service';
+import { SentimentService } from '../sentiment/sentiment.service';
+import { SentimentType } from '../common/types/sentiment.types';
 import { AnalyzeReviewDto } from './dto/analyze-review.dto';
 import { ReviewResponseDto } from './dto/review-response.dto';
+import { SentimentScoresDto } from './dto/sentiment-scores.dto';
 
 @Injectable()
 export class ReviewsService {
@@ -60,16 +62,18 @@ export class ReviewsService {
     neutral: number;
     createdAt: Date;
   }): ReviewResponseDto {
+    const scores: SentimentScoresDto = {
+      positive: review.positive,
+      negative: review.negative,
+      neutral: review.neutral,
+    };
+
     return {
       id: review.id,
       text: review.text,
-      sentiment: review.sentiment as 'POSITIVE' | 'NEGATIVE' | 'NEUTRAL',
+      sentiment: review.sentiment as SentimentType,
       confidence: review.confidence,
-      scores: {
-        positive: review.positive,
-        negative: review.negative,
-        neutral: review.neutral,
-      },
+      scores,
       createdAt: review.createdAt,
     };
   }

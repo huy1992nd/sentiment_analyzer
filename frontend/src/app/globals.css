@@ -67,6 +67,11 @@ body {
   pointer-events: none;
 }
 
+/* Animation delay utility */
+.animation-delay-200 {
+  animation-delay: 200ms;
+}
+
 /* Progress bar */
 .progress-bar {
   transition: width 0.5s ease-out;

@@ -1,19 +1,33 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, OnModuleInit } from '@nestjs/common';
+import { PrismaService } from '../prisma/prisma.service';
+import { SentimentResult, SentimentType } from '../common/types/sentiment.types';
 
-export interface SentimentResult {
-  sentiment: 'POSITIVE' | 'NEGATIVE' | 'NEUTRAL';
-  confidence: number;
-  scores: {
-    positive: number;
-    negative: number;
-    neutral: number;
-  };
+interface KeywordMap {
+  [key: string]: number;
+}
+
+interface ScoreCounts {
+  positive: number;
+  negative: number;
+  neutral: number;
+}
+
+interface RawScores {
+  positive: number;
+  negative: number;
+  neutral: number;
 }
 
 @Injectable()
-export class SentimentService {
-  // Positive keywords với weights
-  private readonly positiveKeywords: Record<string, number> = {
+export class SentimentService implements OnModuleInit {
+  private positiveKeywords: KeywordMap = {};
+  private negativeKeywords: KeywordMap = {};
+  private neutralKeywords: KeywordMap = {};
+  private negationWords: string[] = [];
+  private intensifiers: KeywordMap = {};
+
+  // Default keywords as fallback
+  private readonly defaultPositiveKeywords: KeywordMap = {
     amazing: 0.9,
     excellent: 0.9,
     fantastic: 0.85,
@@ -49,8 +63,7 @@ export class SentimentService {
     exceptional: 0.85,
   };
 
-  // Negative keywords với weights
-  private readonly negativeKeywords: Record<string, number> = {
+  private readonly defaultNegativeKeywords: KeywordMap = {
     terrible: 0.9,
     awful: 0.9,
     horrible: 0.9,
@@ -83,8 +96,7 @@ export class SentimentService {
     inedible: 0.9,
   };
 
-  // Neutral/modifier keywords
-  private readonly neutralKeywords: Record<string, number> = {
+  private readonly defaultNeutralKeywords: KeywordMap = {
     okay: 0.5,
     ok: 0.5,
     average: 0.6,
@@ -99,8 +111,7 @@ export class SentimentService {
     moderate: 0.5,
   };
 
-  // Negation words that flip sentiment
-  private readonly negationWords = [
+  private readonly defaultNegationWords = [
     'not',
     'no',
     "n't",
@@ -114,8 +125,7 @@ export class SentimentService {
     'scarcely',
   ];
 
-  // Intensifiers
-  private readonly intensifiers: Record<string, number> = {
+  private readonly defaultIntensifiers: KeywordMap = {
     very: 1.3,
     really: 1.25,
     extremely: 1.4,
@@ -129,144 +139,248 @@ export class SentimentService {
     totally: 1.25,
   };
 
+  constructor(private readonly prisma: PrismaService) {}
+
+  async onModuleInit() {
+    await this.loadKeywordsFromDatabase();
+  }
+
+  private async loadKeywordsFromDatabase() {
+    try {
+      const keywords = await this.prisma.sentimentKeyword.findMany();
+      
+      if (keywords.length === 0) {
+        // Use default keywords if database is empty
+        this.positiveKeywords = { ...this.defaultPositiveKeywords };
+        this.negativeKeywords = { ...this.defaultNegativeKeywords };
+        this.neutralKeywords = { ...this.defaultNeutralKeywords };
+        this.negationWords = [...this.defaultNegationWords];
+        this.intensifiers = { ...this.defaultIntensifiers };
+        return;
+      }
+
+      // Load keywords from database
+      keywords.forEach((keyword) => {
+        const map = keyword.type === 'POSITIVE' ? this.positiveKeywords :
+                   keyword.type === 'NEGATIVE' ? this.negativeKeywords :
+                   keyword.type === 'NEUTRAL' ? this.neutralKeywords :
+                   keyword.type === 'INTENSIFIER' ? this.intensifiers : null;
+
+        if (map) {
+          map[keyword.word] = keyword.weight;
+        } else if (keyword.type === 'NEGATION') {
+          this.negationWords.push(keyword.word);
+        }
+      });
+
+      // Merge with defaults for any missing keywords
+      this.positiveKeywords = { ...this.defaultPositiveKeywords, ...this.positiveKeywords };
+      this.negativeKeywords = { ...this.defaultNegativeKeywords, ...this.negativeKeywords };
+      this.neutralKeywords = { ...this.defaultNeutralKeywords, ...this.neutralKeywords };
+      this.negationWords = [...new Set([...this.defaultNegationWords, ...this.negationWords])];
+      this.intensifiers = { ...this.defaultIntensifiers, ...this.intensifiers };
+    } catch (error) {
+      // Fallback to default keywords on error
+      console.warn('Failed to load keywords from database, using defaults:', error);
+      this.positiveKeywords = { ...this.defaultPositiveKeywords };
+      this.negativeKeywords = { ...this.defaultNegativeKeywords };
+      this.neutralKeywords = { ...this.defaultNeutralKeywords };
+      this.negationWords = [...this.defaultNegationWords];
+      this.intensifiers = { ...this.defaultIntensifiers };
+    }
+  }
+
   async analyze(text: string): Promise<SentimentResult> {
+    const words = this.tokenizeText(text);
+    const { scores, counts } = this.calculateRawScores(words);
+    
+    if (this.hasNoKeywords(counts)) {
+      return this.createNeutralResult();
+    }
+
+    const normalizedScores = this.normalizeScores(scores, counts);
+    const adjustedScores = this.adjustNeutralBoost(normalizedScores, scores);
+    const finalScores = this.ensureScoreSum(adjustedScores);
+    const { sentiment, confidence } = this.determineSentiment(finalScores, counts, words.length);
+
+    return {
+      sentiment,
+      confidence: this.roundToTwoDecimals(confidence),
+      scores: {
+        positive: this.roundToTwoDecimals(finalScores.positive),
+        negative: this.roundToTwoDecimals(finalScores.negative),
+        neutral: this.roundToTwoDecimals(finalScores.neutral),
+      },
+    };
+  }
+
+  private tokenizeText(text: string): string[] {
     const normalizedText = text.toLowerCase();
-    const words = normalizedText.match(/\b[\w']+\b/g) || [];
+    return normalizedText.match(/\b[\w']+\b/g) || [];
+  }
 
-    let positiveScore = 0;
-    let negativeScore = 0;
-    let neutralScore = 0;
-
-    let positiveCount = 0;
-    let negativeCount = 0;
-    let neutralCount = 0;
+  private calculateRawScores(words: string[]): { scores: RawScores; counts: ScoreCounts } {
+    const scores: RawScores = { positive: 0, negative: 0, neutral: 0 };
+    const counts: ScoreCounts = { positive: 0, negative: 0, neutral: 0 };
 
     for (let i = 0; i < words.length; i++) {
       const word = words[i];
       const prevWord = i > 0 ? words[i - 1] : '';
       const prevPrevWord = i > 1 ? words[i - 2] : '';
 
-      // Check for negation in the previous 2 words
-      const isNegated =
-        this.negationWords.includes(prevWord) ||
-        this.negationWords.includes(prevPrevWord) ||
-        prevWord.endsWith("n't");
+      const isNegated = this.checkNegation(prevWord, prevPrevWord);
+      const intensifier = this.getIntensifier(prevWord);
 
-      // Check for intensifier
-      let intensifier = 1;
-      if (this.intensifiers[prevWord]) {
-        intensifier = this.intensifiers[prevWord];
-      }
-
-      if (this.positiveKeywords[word]) {
-        const score = this.positiveKeywords[word] * intensifier;
-        if (isNegated) {
-          negativeScore += score * 0.8;
-          negativeCount++;
-        } else {
-          positiveScore += score;
-          positiveCount++;
-        }
-      } else if (this.negativeKeywords[word]) {
-        const score = this.negativeKeywords[word] * intensifier;
-        if (isNegated) {
-          positiveScore += score * 0.6;
-          positiveCount++;
-        } else {
-          negativeScore += score;
-          negativeCount++;
-        }
-      } else if (this.neutralKeywords[word]) {
-        neutralScore += this.neutralKeywords[word] * intensifier;
-        neutralCount++;
-      }
+      this.processWord(word, isNegated, intensifier, scores, counts);
     }
 
-    // Calculate raw scores
-    const totalKeywords = positiveCount + negativeCount + neutralCount;
+    return { scores, counts };
+  }
 
-    // If no sentiment keywords found, return neutral with low confidence
-    if (totalKeywords === 0) {
+  private checkNegation(prevWord: string, prevPrevWord: string): boolean {
+    return (
+      this.negationWords.includes(prevWord) ||
+      this.negationWords.includes(prevPrevWord) ||
+      prevWord.endsWith("n't")
+    );
+  }
+
+  private getIntensifier(prevWord: string): number {
+    return this.intensifiers[prevWord] || 1;
+  }
+
+  private processWord(
+    word: string,
+    isNegated: boolean,
+    intensifier: number,
+    scores: RawScores,
+    counts: ScoreCounts,
+  ): void {
+    if (this.positiveKeywords[word]) {
+      const score = this.positiveKeywords[word] * intensifier;
+      if (isNegated) {
+        scores.negative += score * 0.8;
+        counts.negative++;
+      } else {
+        scores.positive += score;
+        counts.positive++;
+      }
+    } else if (this.negativeKeywords[word]) {
+      const score = this.negativeKeywords[word] * intensifier;
+      if (isNegated) {
+        scores.positive += score * 0.6;
+        counts.positive++;
+      } else {
+        scores.negative += score;
+        counts.negative++;
+      }
+    } else if (this.neutralKeywords[word]) {
+      scores.neutral += this.neutralKeywords[word] * intensifier;
+      counts.neutral++;
+    }
+  }
+
+  private hasNoKeywords(counts: ScoreCounts): boolean {
+    return counts.positive + counts.negative + counts.neutral === 0;
+  }
+
+  private createNeutralResult(): SentimentResult {
+    return {
+      sentiment: 'NEUTRAL',
+      confidence: 0.5,
+      scores: {
+        positive: 0.33,
+        negative: 0.33,
+        neutral: 0.34,
+      },
+    };
+  }
+
+  private normalizeScores(scores: RawScores, counts: ScoreCounts): RawScores {
+    const totalScore = scores.positive + scores.negative + scores.neutral || 1;
+    return {
+      positive: scores.positive / totalScore,
+      negative: scores.negative / totalScore,
+      neutral: scores.neutral / totalScore,
+    };
+  }
+
+  private adjustNeutralBoost(normalizedScores: RawScores, rawScores: RawScores): RawScores {
+    const diff = Math.abs(normalizedScores.positive - normalizedScores.negative);
+    
+    if (diff < 0.15 && rawScores.neutral > 0) {
+      const boostedNeutral = Math.min(normalizedScores.neutral * 1.5, 0.6);
+      const remaining = 1 - boostedNeutral;
+      const posNegSum = normalizedScores.positive + normalizedScores.negative;
+      
+      if (posNegSum > 0) {
+        return {
+          positive: (normalizedScores.positive / posNegSum) * remaining,
+          negative: remaining - (normalizedScores.positive / posNegSum) * remaining,
+          neutral: boostedNeutral,
+        };
+      } else {
+        return {
+          positive: remaining / 2,
+          negative: remaining / 2,
+          neutral: boostedNeutral,
+        };
+      }
+    }
+    
+    return normalizedScores;
+  }
+
+  private ensureScoreSum(scores: RawScores): RawScores {
+    const sum = scores.positive + scores.negative + scores.neutral;
+    
+    if (sum > 0) {
       return {
-        sentiment: 'NEUTRAL',
-        confidence: 0.5,
-        scores: {
-          positive: 0.33,
-          negative: 0.33,
-          neutral: 0.34,
-        },
+        positive: scores.positive / sum,
+        negative: scores.negative / sum,
+        neutral: scores.neutral / sum,
       };
     }
+    
+    return {
+      positive: 0.33,
+      negative: 0.33,
+      neutral: 0.34,
+    };
+  }
 
-    // Normalize scores
-    const totalScore = positiveScore + negativeScore + neutralScore || 1;
-
-    let normalizedPositive = positiveScore / totalScore;
-    let normalizedNegative = negativeScore / totalScore;
-    let normalizedNeutral = neutralScore / totalScore;
-
-    // Boost neutral if scores are close
-    const diff = Math.abs(normalizedPositive - normalizedNegative);
-    if (diff < 0.15 && neutralScore > 0) {
-      normalizedNeutral = Math.min(normalizedNeutral * 1.5, 0.6);
-      const remaining = 1 - normalizedNeutral;
-      const posNegSum = normalizedPositive + normalizedNegative;
-      if (posNegSum > 0) {
-        normalizedPositive = (normalizedPositive / posNegSum) * remaining;
-        normalizedNegative = remaining - normalizedPositive;
-      } else {
-        normalizedPositive = remaining / 2;
-        normalizedNegative = remaining / 2;
-      }
-    }
-
-    // Ensure scores sum to 1
-    const sum = normalizedPositive + normalizedNegative + normalizedNeutral;
-    if (sum > 0) {
-      normalizedPositive /= sum;
-      normalizedNegative /= sum;
-      normalizedNeutral /= sum;
-    } else {
-      normalizedPositive = 0.33;
-      normalizedNegative = 0.33;
-      normalizedNeutral = 0.34;
-    }
-
-    // Determine sentiment
-    let sentiment: 'POSITIVE' | 'NEGATIVE' | 'NEUTRAL';
+  private determineSentiment(
+    scores: RawScores,
+    counts: ScoreCounts,
+    textLength: number,
+  ): { sentiment: SentimentType; confidence: number } {
+    let sentiment: SentimentType;
     let confidence: number;
 
-    if (
-      normalizedNeutral > normalizedPositive &&
-      normalizedNeutral > normalizedNegative
-    ) {
+    if (scores.neutral > scores.positive && scores.neutral > scores.negative) {
       sentiment = 'NEUTRAL';
-      confidence = normalizedNeutral;
-    } else if (normalizedPositive > normalizedNegative) {
+      confidence = scores.neutral;
+    } else if (scores.positive > scores.negative) {
       sentiment = 'POSITIVE';
-      confidence = normalizedPositive;
-    } else if (normalizedNegative > normalizedPositive) {
+      confidence = scores.positive;
+    } else if (scores.negative > scores.positive) {
       sentiment = 'NEGATIVE';
-      confidence = normalizedNegative;
+      confidence = scores.negative;
     } else {
       sentiment = 'NEUTRAL';
-      confidence = Math.max(normalizedNeutral, 0.5);
+      confidence = Math.max(scores.neutral, 0.5);
     }
 
     // Adjust confidence based on keyword density
-    const textLength = words.length;
+    const totalKeywords = counts.positive + counts.negative + counts.neutral;
     const keywordDensity = totalKeywords / textLength;
     confidence = Math.min(confidence * (1 + keywordDensity * 0.5), 0.99);
     confidence = Math.max(confidence, 0.5);
 
-    return {
-      sentiment,
-      confidence: Math.round(confidence * 100) / 100,
-      scores: {
-        positive: Math.round(normalizedPositive * 100) / 100,
-        negative: Math.round(normalizedNegative * 100) / 100,
-        neutral: Math.round(normalizedNeutral * 100) / 100,
-      },
-    };
+    return { sentiment, confidence };
+  }
+
+  private roundToTwoDecimals(value: number): number {
+    return Math.round(value * 100) / 100;
   }
 }

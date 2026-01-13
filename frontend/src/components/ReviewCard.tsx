@@ -43,24 +43,19 @@ export function ReviewCard({ review, index = 0 }: ReviewCardProps) {
 
         {/* Score Bars */}
         <div className="space-y-3 pt-2">
-          <ScoreBar
-            label="Positive"
-            score={review.scores.positive}
-            color="bg-gradient-to-r from-emerald-500 to-emerald-400"
-            delay={0}
-          />
-          <ScoreBar
-            label="Negative"
-            score={review.scores.negative}
-            color="bg-gradient-to-r from-red-500 to-red-400"
-            delay={100}
-          />
-          <ScoreBar
-            label="Neutral"
-            score={review.scores.neutral}
-            color="bg-gradient-to-r from-amber-500 to-amber-400"
-            delay={200}
-          />
+          {[
+            { label: 'Positive', score: review.scores.positive, color: 'bg-gradient-to-r from-emerald-500 to-emerald-400', delay: 0 },
+            { label: 'Negative', score: review.scores.negative, color: 'bg-gradient-to-r from-red-500 to-red-400', delay: 100 },
+            { label: 'Neutral', score: review.scores.neutral, color: 'bg-gradient-to-r from-amber-500 to-amber-400', delay: 200 },
+          ].map((config) => (
+            <ScoreBar
+              key={config.label}
+              label={config.label}
+              percentage={Math.round(config.score * 100)}
+              color={config.color}
+              delay={config.delay}
+            />
+          ))}
         </div>
       </div>
     </div>

@@ -4,14 +4,12 @@ import React from 'react';
 
 interface ScoreBarProps {
   label: string;
-  score: number;
+  percentage: number;
   color: string;
   delay?: number;
 }
 
-export function ScoreBar({ label, score, color, delay = 0 }: ScoreBarProps) {
-  const percentage = Math.round(score * 100);
-
+export function ScoreBar({ label, percentage, color, delay = 0 }: ScoreBarProps) {
   return (
     <div className="space-y-2">
       <div className="flex justify-between items-center">

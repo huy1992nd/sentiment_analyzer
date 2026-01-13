@@ -14,10 +14,8 @@ import {
 } from '@nestjs/swagger';
 import { ReviewsService } from './reviews.service';
 import { AnalyzeReviewDto } from './dto/analyze-review.dto';
-import {
-  AnalyzeResponseDto,
-  ReviewsListResponseDto,
-} from './dto/review-response.dto';
+import { AnalyzeResponseDto } from './dto/analyze-response.dto';
+import { ReviewsListResponseDto } from './dto/reviews-list-response.dto';
 
 @ApiTags('reviews')
 @Controller()

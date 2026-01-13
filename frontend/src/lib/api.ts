@@ -12,8 +12,14 @@ export async function analyzeReview(text: string): Promise<AnalyzeResponse> {
   });
 
   if (!response.ok) {
-    const error = await response.json().catch(() => ({}));
-    throw new Error(error.message || 'Failed to analyze review');
+    let errorMessage = 'Failed to analyze review';
+    try {
+      const error = await response.json();
+      errorMessage = error.message || errorMessage;
+    } catch {
+      // If JSON parsing fails, use default message
+    }
+    throw new Error(errorMessage);
   }
 
   return response.json();
@@ -28,8 +34,14 @@ export async function getReviews(): Promise<ReviewsListResponse> {
   });
 
   if (!response.ok) {
-    const error = await response.json().catch(() => ({}));
-    throw new Error(error.message || 'Failed to fetch reviews');
+    let errorMessage = 'Failed to fetch reviews';
+    try {
+      const error = await response.json();
+      errorMessage = error.message || errorMessage;
+    } catch {
+      // If JSON parsing fails, use default message
+    }
+    throw new Error(errorMessage);
   }
 
   return response.json();
